@@ -134,6 +134,10 @@ class PromptServer():
                 # Reusing existing session, remove old
                 self.sockets.pop(sid, None)
 
+            prompt_id = request.rel_url.query.get('promptId', '')
+            if prompt_id == '':
+                prompt_id = sid
+
             # 从请求中获取prompt信息
             json_str = request.rel_url.query.get('prompt', '')
             if json_str == '':
@@ -143,7 +147,7 @@ class PromptServer():
             # json_str 转换为json
             json_data = json.loads(json_str)
             # 调用函数
-            resp, status = self._post_prompt(json_data)
+            resp, status = self._post_prompt(json_data, prompt_id)
             if status != 200:
                 await self.send("prompt_error", { "status": resp, 'sid': sid }, sid)
                 return ws
@@ -166,13 +170,30 @@ class PromptServer():
                 self.sockets.pop(sid, None)
             return ws
 
+        @routes.get('/testws')
+        async def websocket_test_handler(request):
+            # echo messages
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
+            # send welcome message
+            await ws.send_str("Welcome to the test websocket")
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    if msg.data == 'close':
+                        await ws.close()
+                    else:
+                        await ws.send_str(msg.data + '/answer')
+                elif msg.type == aiohttp.WSMsgType.ERROR:
+                    logging.warning('ws connection closed with exception %s' % ws.exception())
+
+            logging.info('websocket connection closed')
 
         @routes.get("/")
         async def get_root(request):
             logging.info("root")
             return web.FileResponse(os.path.join(self.web_root, "index.html"))
         
-        @routes.get("health")
+        @routes.get("/health")
         async def get_health(request):
             logging.info("health")
             return web.json_response({"status": "ok"})
@@ -614,7 +635,7 @@ class PromptServer():
             web.static('/', self.web_root),
         ])
 
-    def _post_prompt(self, json_data):
+    def _post_prompt(self, json_data, prompt_id):
         logging.info("internal post prompt")
         json_data = self.trigger_on_prompt(json_data)
         if "number" in json_data:
@@ -637,7 +658,7 @@ class PromptServer():
             if "client_id" in json_data:
                 extra_data["client_id"] = json_data["client_id"]
             if valid[0]:
-                prompt_id = str(uuid.uuid4())
+                # prompt_id = str(uuid.uuid4())
                 outputs_to_execute = valid[2]
                 self.prompt_queue.put((number, prompt_id, prompt, extra_data, outputs_to_execute))
                 return {"prompt_id": prompt_id, "number": number, "node_errors": valid[3]}, 200
